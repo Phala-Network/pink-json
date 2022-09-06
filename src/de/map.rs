@@ -64,11 +64,11 @@ struct MapKey<'a, 'b> {
 impl<'de, 'a> de::Deserializer<'de> for MapKey<'a, 'de> {
     type Error = Error;
 
-    fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, Error>
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Error>
     where
         V: Visitor<'de>,
     {
-        unreachable!()
+        self.de.deserialize_any(visitor)
     }
 
     fn deserialize_bool<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
@@ -148,11 +148,11 @@ impl<'de, 'a> de::Deserializer<'de> for MapKey<'a, 'de> {
         unreachable!()
     }
 
-    fn deserialize_char<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
+    fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        unreachable!()
+        self.de.deserialize_char(visitor)
     }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -162,11 +162,11 @@ impl<'de, 'a> de::Deserializer<'de> for MapKey<'a, 'de> {
         self.de.deserialize_str(visitor)
     }
 
-    fn deserialize_string<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
+    fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: Visitor<'de>,
     {
-        unreachable!()
+        self.de.deserialize_string(visitor)
     }
 
     fn deserialize_bytes<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
