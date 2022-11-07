@@ -26,3 +26,4 @@ serde_derive = "1.0.80"
 default = ["custom-error-messages"]
 custom-error-messages = []
 std = ["serde/std"]
+de-number-as-str = []

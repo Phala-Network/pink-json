@@ -442,6 +442,12 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                     Reference::Copied(s) => visitor.visit_str(s),
                 }
             }
+            #[cfg(feature = "de-number-as-str")]
+            b'-' | b'0'..=b'9' => {
+                self.scratch.clear();
+                let s = self.read.parse_number_as_str()?;
+                visitor.visit_borrowed_str(s)
+            }
             _ => Err(Error::InvalidType),
         }
     }
@@ -1209,5 +1215,33 @@ mod tests {
                 ty: Type::Thing,
             })
         )
+    }
+
+    #[cfg(feature = "de-number-as-str")]
+    #[test]
+    fn number_as_str() {
+        use alloc::string::String;
+
+        let s: String = crate::from_str("0").unwrap();
+        assert_eq!(s, "0");
+
+        macro_rules! works_with {
+            ($val: literal) => {
+                let s: &str = crate::from_str($val).unwrap();
+                assert_eq!(s, $val);
+            };
+        }
+        works_with!("0");
+        works_with!("-");
+        works_with!("-0.1");
+        works_with!("9999");
+        works_with!("9999.999");
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Test<'a> {
+            number: &'a str,
+        }
+        let data: Test<'_> = crate::from_str(r#"{ "number": 3.1415926 }"#).unwrap();
+        assert_eq!(data.number, "3.1415926")
     }
 }

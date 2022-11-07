@@ -51,6 +51,8 @@ pub trait Read<'de>: private::Sealed {
     /// necessary. The scratch space is initially empty.
     #[doc(hidden)]
     fn parse_str<'s>(&'s mut self, scratch: &'s mut Vec<u8>) -> Result<Reference<'de, 's, str>>;
+    #[cfg(feature = "de-number-as-str")]
+    fn parse_number_as_str(&mut self) -> Result<&'de str>;
 
     /// Assumes the previous byte was a quotation mark. Parses a JSON-escaped
     /// string until the next quotation mark using the given scratch space if
@@ -254,6 +256,29 @@ impl<'a> Read<'a> for SliceRead<'a> {
         self.parse_str_bytes(scratch, true, as_str)
     }
 
+    #[cfg(feature = "de-number-as-str")]
+    fn parse_number_as_str(&mut self) -> Result<&'a str> {
+        let start = self.index;
+        let mut end = start;
+        self.index += 1;
+        let mut has_point = false;
+        while self.index < self.slice.len() {
+            if !matches!(self.slice[self.index], b'0'..=b'9' | b'.') {
+                break;
+            }
+            if self.slice[self.index] == b'.' {
+                if has_point {
+                    break;
+                } else {
+                    has_point = true;
+                }
+            }
+            end = self.index;
+            self.index += 1;
+        }
+        as_str(self, &self.slice[start..=end])
+    }
+
     fn parse_str_raw<'s>(
         &'s mut self,
         scratch: &'s mut Vec<u8>,
@@ -365,6 +390,11 @@ where
 
     fn set_failed(&mut self, failed: &mut bool) {
         R::set_failed(self, failed);
+    }
+
+    #[cfg(feature = "de-number-as-str")]
+    fn parse_number_as_str(&mut self) -> Result<&'de str> {
+        R::parse_number_as_str(self)
     }
 }
 
