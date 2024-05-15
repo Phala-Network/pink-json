@@ -1,31 +1,29 @@
 [package]
-authors = ["Jorge Aparicio <jorge@japaric.io>"]
+authors = ["Jorge Aparicio <jorge@japaric.io>", "Kevin Wang <wy721@qq.com>"]
 categories = ["no-std"]
-description = "serde-json for no_std programs"
+description = "serde-json for pink programs"
 documentation = "https://docs.rs/serde-json-core"
 edition = "2018"
 keywords = ["serde", "json"]
 license = "MIT OR Apache-2.0"
-name = "serde-json-core"
+name = "pink-json"
 readme = "README.md"
-repository = "https://github.com/rust-embedded-community/serde-json-core"
+repository = "https://github.com/Phala-Network/pink-json"
 version = "0.4.0"
 
 [dependencies]
 ryu = "1.0.5"
 
-[dependencies.heapless]
-version = "0.7"
-optional = true
-
 [dependencies.serde]
 default-features = false
+features = ["alloc"]
 version = "1.0.80"
 
 [dev-dependencies]
 serde_derive = "1.0.80"
 
 [features]
-default = ["heapless"]
-custom-error-messages = ["heapless"]
+default = ["custom-error-messages"]
+custom-error-messages = []
 std = ["serde/std"]
+de-number-as-str = []

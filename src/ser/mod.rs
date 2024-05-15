@@ -1,12 +1,10 @@
 //! Serialize a Rust data structure into JSON data
-
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::{fmt, str};
 
 use serde::ser;
 use serde::ser::SerializeStruct as _;
-
-#[cfg(feature = "heapless")]
-use heapless::{String, Vec};
 
 use self::map::SerializeMap;
 use self::seq::SerializeSeq;
@@ -25,6 +23,8 @@ pub type Result<T> = ::core::result::Result<T, Error>;
 pub enum Error {
     /// Buffer is full
     BufferFull,
+    /// The serializing value type are not supported
+    InvalidValue,
 }
 
 impl From<()> for Error {
@@ -52,43 +52,23 @@ impl fmt::Display for Error {
     }
 }
 
-pub(crate) struct Serializer<'a> {
-    buf: &'a mut [u8],
-    current_length: usize,
+pub(crate) struct Serializer {
+    buf: Vec<u8>,
 }
 
-impl<'a> Serializer<'a> {
-    fn new(buf: &'a mut [u8]) -> Self {
-        Serializer {
-            buf,
-            current_length: 0,
-        }
+impl Serializer {
+    fn new() -> Self {
+        Serializer { buf: Vec::new() }
     }
 
     fn push(&mut self, c: u8) -> Result<()> {
-        if self.current_length < self.buf.len() {
-            unsafe { self.push_unchecked(c) };
-            Ok(())
-        } else {
-            Err(Error::BufferFull)
-        }
-    }
-
-    unsafe fn push_unchecked(&mut self, c: u8) {
-        self.buf[self.current_length] = c;
-        self.current_length += 1;
+        self.buf.push(c);
+        Ok(())
     }
 
     fn extend_from_slice(&mut self, other: &[u8]) -> Result<()> {
-        if self.current_length + other.len() > self.buf.len() {
-            // won't fit in the buf; don't modify anything and return an error
-            Err(Error::BufferFull)
-        } else {
-            for c in other {
-                unsafe { self.push_unchecked(*c) };
-            }
-            Ok(())
-        }
+        self.buf.extend_from_slice(other);
+        Ok(())
     }
 }
 
@@ -148,14 +128,6 @@ macro_rules! serialize_signed {
     }};
 }
 
-macro_rules! serialize_ryu {
-    ($self:ident, $v:expr) => {{
-        let mut buffer = ryu::Buffer::new();
-        let printed = buffer.format($v);
-        $self.extend_from_slice(printed.as_bytes())
-    }};
-}
-
 /// Upper-case hex for value in 0..16, encoded as ASCII bytes
 fn hex_4bit(c: u8) -> u8 {
     if c <= 9 {
@@ -170,16 +142,16 @@ fn hex(c: u8) -> (u8, u8) {
     (hex_4bit(c >> 4), hex_4bit(c & 0x0F))
 }
 
-impl<'a, 'b: 'a> ser::Serializer for &'a mut Serializer<'b> {
+impl<'a> ser::Serializer for &'a mut Serializer {
     type Ok = ();
     type Error = Error;
-    type SerializeSeq = SerializeSeq<'a, 'b>;
-    type SerializeTuple = SerializeSeq<'a, 'b>;
+    type SerializeSeq = SerializeSeq<'a>;
+    type SerializeTuple = SerializeSeq<'a>;
     type SerializeTupleStruct = Unreachable;
     type SerializeTupleVariant = Unreachable;
-    type SerializeMap = SerializeMap<'a, 'b>;
-    type SerializeStruct = SerializeStruct<'a, 'b>;
-    type SerializeStructVariant = SerializeStructVariant<'a, 'b>;
+    type SerializeMap = SerializeMap<'a>;
+    type SerializeStruct = SerializeStruct<'a>;
+    type SerializeStructVariant = SerializeStructVariant<'a>;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok> {
         if v {
@@ -229,24 +201,16 @@ impl<'a, 'b: 'a> ser::Serializer for &'a mut Serializer<'b> {
         serialize_unsigned!(self, 20, v)
     }
 
-    fn serialize_f32(self, v: f32) -> Result<Self::Ok> {
-        if v.is_finite() {
-            serialize_ryu!(self, v)
-        } else {
-            self.serialize_none()
-        }
+    fn serialize_f32(self, _v: f32) -> Result<Self::Ok> {
+        Err(Error::InvalidValue)
     }
 
-    fn serialize_f64(self, v: f64) -> Result<Self::Ok> {
-        if v.is_finite() {
-            serialize_ryu!(self, v)
-        } else {
-            self.serialize_none()
-        }
+    fn serialize_f64(self, _v: f64) -> Result<Self::Ok> {
+        Err(Error::InvalidValue)
     }
 
     fn serialize_char(self, _v: char) -> Result<Self::Ok> {
-        unreachable!()
+        Err(Error::InvalidValue)
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
@@ -432,35 +396,21 @@ impl<'a, 'b: 'a> ser::Serializer for &'a mut Serializer<'b> {
 }
 
 /// Serializes the given data structure as a string of JSON text
-#[cfg(feature = "heapless")]
-pub fn to_string<T, const N: usize>(value: &T) -> Result<String<N>>
+pub fn to_string<T>(value: &T) -> Result<String>
 where
     T: ser::Serialize + ?Sized,
 {
-    Ok(unsafe { str::from_utf8_unchecked(&to_vec::<T, N>(value)?) }.into())
+    Ok(unsafe { str::from_utf8_unchecked(&to_vec::<T>(value)?) }.into())
 }
 
 /// Serializes the given data structure as a JSON byte vector
-#[cfg(feature = "heapless")]
-pub fn to_vec<T, const N: usize>(value: &T) -> Result<Vec<u8, N>>
+pub fn to_vec<T>(value: &T) -> Result<Vec<u8>>
 where
     T: ser::Serialize + ?Sized,
 {
-    let mut buf = Vec::<u8, N>::new();
-    buf.resize_default(N)?;
-    let len = to_slice(value, &mut buf)?;
-    buf.truncate(len);
-    Ok(buf)
-}
-
-/// Serializes the given data structure as a JSON byte vector into the provided buffer
-pub fn to_slice<T>(value: &T, buf: &mut [u8]) -> Result<usize>
-where
-    T: ser::Serialize + ?Sized,
-{
-    let mut ser = Serializer::new(buf);
+    let mut ser = Serializer::new();
     value.serialize(&mut ser)?;
-    Ok(ser.current_length)
+    Ok(ser.buf)
 }
 
 impl ser::Error for Error {
@@ -527,25 +477,21 @@ impl ser::SerializeMap for Unreachable {
 mod tests {
     use serde_derive::Serialize;
 
-    const N: usize = 128;
-
     #[test]
     fn array() {
-        let buf = &mut [0u8; 128];
-        let len = crate::to_slice(&[0, 1, 2], buf).unwrap();
-        assert_eq!(len, 7);
-        assert_eq!(&buf[..len], b"[0,1,2]");
-        assert_eq!(&*crate::to_string::<_, N>(&[0, 1, 2]).unwrap(), "[0,1,2]");
+        let buf = crate::to_vec(&[0, 1, 2]).unwrap();
+        assert_eq!(buf.len(), 7);
+        assert_eq!(&buf, b"[0,1,2]");
+        assert_eq!(&*crate::to_string(&[0, 1, 2]).unwrap(), "[0,1,2]");
     }
 
     #[test]
     fn bool() {
-        let buf = &mut [0u8; 128];
-        let len = crate::to_slice(&true, buf).unwrap();
-        assert_eq!(len, 4);
-        assert_eq!(&buf[..len], b"true");
+        let buf = crate::to_vec(&true).unwrap();
+        assert_eq!(buf.len(), 4);
+        assert_eq!(&buf, b"true");
 
-        assert_eq!(&*crate::to_string::<_, N>(&true).unwrap(), "true");
+        assert_eq!(&*crate::to_string(&true).unwrap(), "true");
     }
 
     #[test]
@@ -559,83 +505,83 @@ mod tests {
         }
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Type::Boolean).unwrap(),
+            &*crate::to_string(&Type::Boolean).unwrap(),
             r#""boolean""#
         );
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Type::Number).unwrap(),
+            &*crate::to_string(&Type::Number).unwrap(),
             r#""number""#
         );
     }
 
     #[test]
     fn str() {
-        assert_eq!(&*crate::to_string::<_, N>("hello").unwrap(), r#""hello""#);
-        assert_eq!(&*crate::to_string::<_, N>("").unwrap(), r#""""#);
+        assert_eq!(&*crate::to_string("hello").unwrap(), r#""hello""#);
+        assert_eq!(&*crate::to_string("").unwrap(), r#""""#);
 
         // Characters unescaped if possible
-        assert_eq!(&*crate::to_string::<_, N>("ä").unwrap(), r#""ä""#);
-        assert_eq!(&*crate::to_string::<_, N>("৬").unwrap(), r#""৬""#);
-        // assert_eq!(&*crate::to_string::<_, N>("\u{A0}").unwrap(), r#"" ""#); // non-breaking space
-        assert_eq!(&*crate::to_string::<_, N>("ℝ").unwrap(), r#""ℝ""#); // 3 byte character
-        assert_eq!(&*crate::to_string::<_, N>("💣").unwrap(), r#""💣""#); // 4 byte character
+        assert_eq!(&*crate::to_string("ä").unwrap(), r#""ä""#);
+        assert_eq!(&*crate::to_string("৬").unwrap(), r#""৬""#);
+        // assert_eq!(&*crate::to_string("\u{A0}").unwrap(), r#"" ""#); // non-breaking space
+        assert_eq!(&*crate::to_string("ℝ").unwrap(), r#""ℝ""#); // 3 byte character
+        assert_eq!(&*crate::to_string("💣").unwrap(), r#""💣""#); // 4 byte character
 
         // " and \ must be escaped
         assert_eq!(
-            &*crate::to_string::<_, N>("foo\"bar").unwrap(),
+            &*crate::to_string("foo\"bar").unwrap(),
             r#""foo\"bar""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>("foo\\bar").unwrap(),
+            &*crate::to_string("foo\\bar").unwrap(),
             r#""foo\\bar""#
         );
 
         // \b, \t, \n, \f, \r must be escaped in their two-character escaping
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{0008} ").unwrap(),
+            &*crate::to_string(" \u{0008} ").unwrap(),
             r#"" \b ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{0009} ").unwrap(),
+            &*crate::to_string(" \u{0009} ").unwrap(),
             r#"" \t ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{000A} ").unwrap(),
+            &*crate::to_string(" \u{000A} ").unwrap(),
             r#"" \n ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{000C} ").unwrap(),
+            &*crate::to_string(" \u{000C} ").unwrap(),
             r#"" \f ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{000D} ").unwrap(),
+            &*crate::to_string(" \u{000D} ").unwrap(),
             r#"" \r ""#
         );
 
         // U+0000 through U+001F is escaped using six-character \u00xx uppercase hexadecimal escape sequences
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{0000} ").unwrap(),
+            &*crate::to_string(" \u{0000} ").unwrap(),
             r#"" \u0000 ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{0001} ").unwrap(),
+            &*crate::to_string(" \u{0001} ").unwrap(),
             r#"" \u0001 ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{0007} ").unwrap(),
+            &*crate::to_string(" \u{0007} ").unwrap(),
             r#"" \u0007 ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{000e} ").unwrap(),
+            &*crate::to_string(" \u{000e} ").unwrap(),
             r#"" \u000E ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{001D} ").unwrap(),
+            &*crate::to_string(" \u{001D} ").unwrap(),
             r#"" \u001D ""#
         );
         assert_eq!(
-            &*crate::to_string::<_, N>(" \u{001f} ").unwrap(),
+            &*crate::to_string(" \u{001f} ").unwrap(),
             r#"" \u001F ""#
         );
     }
@@ -648,7 +594,7 @@ mod tests {
         }
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Led { led: true }).unwrap(),
+            &*crate::to_string(&Led { led: true }).unwrap(),
             r#"{"led":true}"#
         );
     }
@@ -661,22 +607,22 @@ mod tests {
         }
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature { temperature: 127 }).unwrap(),
+            &*crate::to_string(&Temperature { temperature: 127 }).unwrap(),
             r#"{"temperature":127}"#
         );
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature { temperature: 20 }).unwrap(),
+            &*crate::to_string(&Temperature { temperature: 20 }).unwrap(),
             r#"{"temperature":20}"#
         );
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature { temperature: -17 }).unwrap(),
+            &*crate::to_string(&Temperature { temperature: -17 }).unwrap(),
             r#"{"temperature":-17}"#
         );
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature { temperature: -128 }).unwrap(),
+            &*crate::to_string(&Temperature { temperature: -128 }).unwrap(),
             r#"{"temperature":-128}"#
         );
     }
@@ -689,12 +635,12 @@ mod tests {
         }
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature { temperature: -20. }).unwrap(),
+            &*crate::to_string(&Temperature { temperature: -20. }).unwrap(),
             r#"{"temperature":-20.0}"#
         );
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature {
+            &*crate::to_string(&Temperature {
                 temperature: -20345.
             })
             .unwrap(),
@@ -702,7 +648,7 @@ mod tests {
         );
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature {
+            &*crate::to_string(&Temperature {
                 temperature: -2.3456789012345e-23
             })
             .unwrap(),
@@ -710,7 +656,7 @@ mod tests {
         );
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature {
+            &*crate::to_string(&Temperature {
                 temperature: f32::NAN
             })
             .unwrap(),
@@ -718,7 +664,7 @@ mod tests {
         );
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature {
+            &*crate::to_string(&Temperature {
                 temperature: f32::NEG_INFINITY
             })
             .unwrap(),
@@ -734,7 +680,7 @@ mod tests {
         }
 
         assert_eq!(
-            crate::to_string::<_, N>(&Property {
+            crate::to_string(&Property {
                 description: Some("An ambient temperature sensor"),
             })
             .unwrap(),
@@ -743,7 +689,7 @@ mod tests {
 
         // XXX Ideally this should produce "{}"
         assert_eq!(
-            crate::to_string::<_, N>(&Property { description: None }).unwrap(),
+            crate::to_string(&Property { description: None }).unwrap(),
             r#"{"description":null}"#
         );
     }
@@ -756,7 +702,7 @@ mod tests {
         }
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Temperature { temperature: 20 }).unwrap(),
+            &*crate::to_string(&Temperature { temperature: 20 }).unwrap(),
             r#"{"temperature":20}"#
         );
     }
@@ -766,7 +712,7 @@ mod tests {
         #[derive(Serialize)]
         struct Empty {}
 
-        assert_eq!(&*crate::to_string::<_, N>(&Empty {}).unwrap(), r#"{}"#);
+        assert_eq!(&*crate::to_string(&Empty {}).unwrap(), r#"{}"#);
 
         #[derive(Serialize)]
         struct Tuple {
@@ -775,7 +721,7 @@ mod tests {
         }
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&Tuple { a: true, b: false }).unwrap(),
+            &*crate::to_string(&Tuple { a: true, b: false }).unwrap(),
             r#"{"a":true,"b":false}"#
         );
     }
@@ -783,7 +729,7 @@ mod tests {
     #[test]
     fn test_unit() {
         let a = ();
-        assert_eq!(&*crate::to_string::<_, N>(&a).unwrap(), r#"null"#);
+        assert_eq!(&*crate::to_string(&a).unwrap(), r#"null"#);
     }
 
     #[test]
@@ -791,7 +737,7 @@ mod tests {
         #[derive(Serialize)]
         struct A(pub u32);
         let a = A(54);
-        assert_eq!(&*crate::to_string::<_, N>(&a).unwrap(), r#"54"#);
+        assert_eq!(&*crate::to_string(&a).unwrap(), r#"54"#);
     }
 
     #[test]
@@ -802,7 +748,7 @@ mod tests {
         }
         let a = A::A(54);
 
-        assert_eq!(&*crate::to_string::<_, N>(&a).unwrap(), r#"{"A":54}"#);
+        assert_eq!(&*crate::to_string(&a).unwrap(), r#"{"A":54}"#);
     }
 
     #[test]
@@ -814,7 +760,7 @@ mod tests {
         let a = A::A { x: 54, y: 720 };
 
         assert_eq!(
-            &*crate::to_string::<_, N>(&a).unwrap(),
+            &*crate::to_string(&a).unwrap(),
             r#"{"A":{"x":54,"y":720}}"#
         );
     }
@@ -822,7 +768,7 @@ mod tests {
     #[test]
     fn test_serialize_bytes() {
         use core::fmt::Write;
-        use heapless::String;
+        use alloc::string::String;
 
         pub struct SimpleDecimal(f32);
 
@@ -831,19 +777,19 @@ mod tests {
             where
                 S: serde::Serializer,
             {
-                let mut aux: String<{ N }> = String::new();
+                let mut aux  = String::new();
                 write!(aux, "{:.2}", self.0).unwrap();
                 serializer.serialize_bytes(&aux.as_bytes())
             }
         }
 
         let sd1 = SimpleDecimal(1.55555);
-        assert_eq!(&*crate::to_string::<_, N>(&sd1).unwrap(), r#"1.56"#);
+        assert_eq!(&*crate::to_string(&sd1).unwrap(), r#"1.56"#);
 
         let sd2 = SimpleDecimal(0.000);
-        assert_eq!(&*crate::to_string::<_, N>(&sd2).unwrap(), r#"0.00"#);
+        assert_eq!(&*crate::to_string(&sd2).unwrap(), r#"0.00"#);
 
         let sd3 = SimpleDecimal(22222.777777);
-        assert_eq!(&*crate::to_string::<_, N>(&sd3).unwrap(), r#"22222.78"#);
+        assert_eq!(&*crate::to_string(&sd3).unwrap(), r#"22222.78"#);
     }
 }

@@ -1,3 +1,6 @@
+# pink-json
+The serde-json-core with `alloc::*` types.
+
 # `serde-json-core`
 
 > [`serde-json`] for `no_std` programs
